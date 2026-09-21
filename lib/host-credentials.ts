@@ -318,6 +318,7 @@ export async function claudeCliInstalled(): Promise<boolean> {
 // the result is written back at once, wherever it came from.
 
 const OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+// Claude Code's public OAuth client (not a user secret). Same id the CLI uses.
 const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
 export function isExpired(credentials: ClaudeOauth): boolean {

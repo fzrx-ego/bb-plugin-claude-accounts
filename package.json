@@ -1,13 +1,13 @@
 {
   "name": "bb-plugin-claude-accounts",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "engines": {
     "bb": ">=0.43",
     "bbPluginSdk": ">=0.4.104"
   },
   "bb": {
-    "name": "Claude Accounts",
+    "name": "Fast Switch Claude Accounts",
     "description": "Saves the machine's Claude Code logins in the Keychain and switches between them, and shows Claude, Cursor and Codex limits.",
     "branding": {
       "icon": "Users"

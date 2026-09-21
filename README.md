@@ -1,4 +1,4 @@
-# Claude Accounts
+# Fast Switch Claude Accounts
 
 A [BB](https://getbb.app) plugin for several Claude Code logins on one machine,
 switchable from BB, plus limits for Claude, Cursor and Codex.
@@ -6,12 +6,12 @@ switchable from BB, plus limits for Claude, Cursor and Codex.
 ## Install
 
 ```
-bb plugin install git:https://github.com/fzrx-ego/bb-plugin-claude-accounts.git@semver:^0.3.0
+bb plugin install git:https://github.com/fzrx-ego/bb-plugin-claude-accounts.git@semver:^0.3.1
 ```
 
 ## Page
 
-Sidebar → **Claude accounts**.
+Sidebar → **Fast Switch Claude Accounts**.
 
 - **This machine** — the login Claude Code is using now, and a field to save
   it under a label.

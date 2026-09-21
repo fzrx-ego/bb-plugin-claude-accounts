@@ -18,6 +18,7 @@ import type { ClaudeOauth } from "./host-credentials";
 const AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
+// Claude Code's public OAuth client (not a user secret). Same id the CLI uses.
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const SCOPES = [
   "org:create_api_key",

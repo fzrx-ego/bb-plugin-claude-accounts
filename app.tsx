@@ -7,7 +7,7 @@ import { NavigateBridge, openAccountsPage } from "./lib/navigate-bridge";
 export default definePluginApp((app) => {
   app.slots.navPanel({
     id: "claude-accounts",
-    title: "Claude accounts",
+    title: "Fast Switch Claude Accounts",
     icon: "Users",
     path: "accounts",
     component: AccountsPage,
@@ -22,7 +22,7 @@ export default definePluginApp((app) => {
   app.experimental_sidebarFooter.register({
     kind: "action",
     id: "accounts",
-    label: "Claude accounts",
+    label: "Fast Switch Claude Accounts",
     icon: "Users",
     onActivate: ({ openPluginDetails }) => {
       if (!openAccountsPage()) openPluginDetails();

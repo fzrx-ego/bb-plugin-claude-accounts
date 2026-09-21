@@ -3,7 +3,7 @@ name: claude-accounts
 description: Switch the machine's Claude Code login between saved accounts and read Claude/Cursor/Codex limits with `bb claude-accounts`. Use when the user asks to change Claude account, check remaining limits, or list logins.
 ---
 
-# Claude accounts
+# Fast Switch Claude Accounts
 
 One Claude Code login is active per machine. This plugin snapshots logins in
 the macOS Keychain and swaps them. Tokens stay on the host.
