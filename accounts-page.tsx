@@ -11,6 +11,8 @@ import { cn } from "@/lib/utils";
 import { resetLabel } from "./lib/reset-label";
 import type { rpcContract } from "./server";
 import type {
+  CodexAccount,
+  CodexState,
   MachineState,
   ProviderCard,
   SavedAccount,
@@ -19,7 +21,7 @@ import type {
 
 type Rpc = ReturnType<typeof useRpc<typeof rpcContract>>;
 
-function UsageView({ usage }: { usage: Usage }) {
+function UsageView({ usage, provider = "claude" }: { usage: Usage; provider?: "claude" | "codex" }) {
   if (usage.status === "ok") {
     if (usage.windows.length === 0) {
       return (
@@ -57,7 +59,9 @@ function UsageView({ usage }: { usage: Usage }) {
   }
   const message =
     usage.status === "expired"
-      ? "Anthropic rejected the stored token. Run `claude /login` as this account, then press Save current."
+      ? provider === "codex"
+        ? "Codex access token expired. Switch to this account and start a new Codex thread to refresh it."
+        : "Anthropic rejected the stored token. Run `claude /login` as this account, then press Save current."
       : usage.status === "unauthenticated"
         ? "Not logged in."
         : usage.status === "not_installed"
@@ -171,6 +175,42 @@ function AccountCard({
   );
 }
 
+function CodexAccountCard({ account, isActive, rpc, pending, setPending, onChanged, onError }: {
+  account: CodexAccount;
+  isActive: boolean;
+  rpc: Rpc;
+  pending: boolean;
+  setPending: (value: boolean) => void;
+  onChanged: () => void;
+  onError: (cause: unknown) => void;
+}) {
+  const limits = useUsage(async () => (await rpc.call("codex_usage", { id: account.id })).usage);
+  return (
+    <li className="rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-medium">{account.label}</span>
+            {isActive ? <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">Active</span> : null}
+          </div>
+          <p className="truncate text-xs text-muted-foreground">{account.email ?? account.id}</p>
+        </div>
+        <LimitsButton pending={limits.pending} onClick={limits.check} />
+        <Button size="sm" disabled={pending || isActive} onClick={() => {
+          setPending(true);
+          rpc.call("codex_switch", { id: account.id }).then(onChanged, onError).finally(() => setPending(false));
+        }}>{isActive ? "In use" : pending ? "Switching…" : "Switch"}</Button>
+        <Button variant="ghost" size="icon" className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label={`Forget Codex account "${account.label}"`} disabled={pending || isActive} onClick={() => {
+            setPending(true);
+            rpc.call("codex_forget", { id: account.id }).then(onChanged, onError).finally(() => setPending(false));
+          }}><Icon name="Trash2" className="size-4" /></Button>
+      </div>
+      {limits.usage === null ? null : <UsageView usage={limits.usage} provider="codex" />}
+    </li>
+  );
+}
+
 function ProviderRow({ provider, rpc }: { provider: ProviderCard; rpc: Rpc }) {
   const limits = useUsage(
     async () =>
@@ -255,10 +295,69 @@ function useLogin(rpc: Rpc, onDone: () => void) {
   return { pending, message, start, cancel };
 }
 
+function useCodexLogin(rpc: Rpc, onDone: () => void) {
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopPolling = useCallback(() => {
+    if (timer.current !== null) clearInterval(timer.current);
+    timer.current = null;
+  }, []);
+  useEffect(() => stopPolling, [stopPolling]);
+
+  const start = () => {
+    setPending(true);
+    setMessage(null);
+    rpc.call("codex_login_start").then(() => {
+      setMessage("Approve the Codex sign-in in the browser tab that just opened.");
+      stopPolling();
+      timer.current = setInterval(() => {
+        rpc.call("codex_login_poll").then((poll) => {
+          if (poll.status === "pending") {
+            setMessage(poll.message);
+            return;
+          }
+          stopPolling();
+          setPending(false);
+          if (poll.status === "done" && poll.account !== null) {
+            setMessage(`Signed in as ${poll.account.email ?? poll.account.id}. Add a label and press Save current.`);
+            onDone();
+          } else {
+            setMessage(poll.status === "failed" ? poll.message ?? "Sign-in failed." : "Sign-in was cancelled.");
+          }
+        }, (cause: unknown) => {
+          stopPolling();
+          setPending(false);
+          setMessage(cause instanceof Error ? cause.message : String(cause));
+        });
+      }, 2000);
+    }, (cause: unknown) => {
+      setPending(false);
+      setMessage(cause instanceof Error ? cause.message : String(cause));
+    });
+  };
+
+  const cancel = () => {
+    rpc.call("codex_login_cancel").then(({ cancelled }) => {
+      if (!cancelled) {
+        setMessage("Saving the new Codex login…");
+        return;
+      }
+      stopPolling();
+      setPending(false);
+      setMessage("Sign-in was cancelled.");
+    }, (cause: unknown) => setMessage(cause instanceof Error ? cause.message : String(cause)));
+  };
+  return { pending, message, start, cancel };
+}
+
 export function AccountsPage() {
   const rpc = useRpc<typeof rpcContract>();
   const [state, setState] = useState<MachineState | null>(null);
   const [providers, setProviders] = useState<ProviderCard[]>([]);
+  const [codex, setCodex] = useState<CodexState | null>(null);
+  const [codexLabel, setCodexLabel] = useState("");
+  const [codexPending, setCodexPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [label, setLabel] = useState("");
   const [saving, setSaving] = useState(false);
@@ -273,13 +372,17 @@ export function AccountsPage() {
       setError(null);
     }, onError);
     rpc.call("providers").then((next) => setProviders(next.providers), onError);
+    rpc.call("codex_state").then(setCodex, onError);
   }, [rpc, onError]);
 
   useEffect(refetch, [refetch]);
   useRealtime("accounts-changed", refetch);
   const login = useLogin(rpc, refetch);
+  const codexLogin = useCodexLogin(rpc, refetch);
 
   const active = state?.active ?? null;
+  const codexCurrentSaved = codex !== null && codex.activeError === null &&
+    (codex.activeId === null || codex.accounts.some((account) => account.id === codex.activeId));
 
   return (
     <div className="h-full min-h-0 flex-1 overflow-y-auto">
@@ -375,17 +478,57 @@ export function AccountsPage() {
           </ul>
         )}
 
+        <h2 className="mt-6 text-sm font-medium">Codex accounts</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {codex === null ? "Reading the current Codex login…" :
+            `Current login: ${codex.activeError ?? codex.activeEmail ?? codex.activeId ?? "none"}.${codex.activeId !== null && !codexCurrentSaved ? " Add a label and save it before switching accounts." : ""}`}
+        </p>
+        <form className="mt-3 flex items-center gap-2" onSubmit={(event) => {
+          event.preventDefault();
+          if (!codexLabel.trim() || codexPending || codexLogin.pending) return;
+          setCodexPending(true);
+          rpc.call("codex_save", { label: codexLabel.trim() }).then(() => {
+            setCodexLabel(""); refetch();
+          }, onError).finally(() => setCodexPending(false));
+        }}>
+          <Input value={codexLabel} onChange={(event) => setCodexLabel(event.target.value)}
+            placeholder="Label for the current login (Work, Personal, …)" aria-label="Codex account label" />
+          <Button type="submit" disabled={codexPending || codexLogin.pending || !codexLabel.trim()}>
+            <Icon name="Save" className="size-4" /> Save current
+          </Button>
+        </form>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={codexLogin.start} disabled={codexPending || codexLogin.pending || !codexCurrentSaved}>
+            <Icon name="LogIn" className="size-4" />
+            {codexLogin.pending ? "Waiting for the browser…" : "Sign in another account"}
+          </Button>
+          {codexLogin.pending ? <Button variant="ghost" size="sm" onClick={codexLogin.cancel}>Cancel</Button> : null}
+          {codexLogin.message === null ? null : <span className="text-xs text-muted-foreground">{codexLogin.message}</span>}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Signing in activates the new account. Save it with a label to add it to the list. Finish running Codex threads before switching accounts.
+        </p>
+        {codex?.accounts.length ? (
+          <ul className="mt-2 space-y-2">
+            {codex.accounts.map((account) => (
+              <CodexAccountCard key={account.id} account={account} isActive={account.id === codex.activeId}
+                rpc={rpc} pending={codexPending || codexLogin.pending || !codexCurrentSaved} setPending={setCodexPending}
+                onChanged={refetch} onError={onError} />
+            ))}
+          </ul>
+        ) : <p className="mt-2 text-sm text-muted-foreground">No saved Codex accounts yet.</p>}
+
         <h2 className="mt-6 text-sm font-medium">Other providers</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          Limits only. This plugin never changes these logins.
+          Limits only.
         </p>
-        {providers.length === 0 ? (
+        {providers.filter((provider) => provider.providerId !== "codex").length === 0 ? (
           <p className="mt-2 text-sm text-muted-foreground">
             No other provider is logged in on this host.
           </p>
         ) : (
           <ul className="mt-2 space-y-2">
-            {providers.map((provider) => (
+            {providers.filter((provider) => provider.providerId !== "codex").map((provider) => (
               <ProviderRow
                 key={provider.providerId}
                 provider={provider}

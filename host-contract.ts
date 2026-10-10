@@ -7,9 +7,21 @@ import {
   type ExperimentalHostSignals,
 } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { machineStateSchema, savedAccountSchema, usageSchema } from "./schema";
+import { codexAccountSchema, codexIdentitySchema, codexStateSchema, machineStateSchema, savedAccountSchema, usageSchema } from "./schema";
 
 export const hostContract = defineRpcContract({
+  codexState: { input: z.null(), output: codexStateSchema },
+  codexSave: { input: z.object({ label: z.string().trim().min(1).max(60) }).strict(), output: z.object({ account: codexAccountSchema }).strict() },
+  codexSwitch: { input: z.object({ id: z.string() }).strict(), output: z.object({ account: codexAccountSchema }).strict() },
+  codexForget: { input: z.object({ id: z.string() }).strict(), output: z.object({ removed: z.boolean() }).strict() },
+  codexUsage: { input: z.object({ id: z.string() }).strict(), output: z.object({ usage: usageSchema }).strict() },
+  codexLoginStart: { input: z.null(), output: z.object({ started: z.boolean() }).strict() },
+  codexLoginPoll: { input: z.null(), output: z.object({
+    status: z.enum(["idle", "pending", "done", "failed"]),
+    message: z.string().nullable(),
+    account: codexIdentitySchema.nullable(),
+  }).strict() },
+  codexLoginCancel: { input: z.null(), output: z.object({ cancelled: z.boolean() }).strict() },
   state: {
     input: z.null(),
     output: machineStateSchema,

@@ -36,6 +36,25 @@ export const machineStateSchema = z.object({
 });
 export type MachineState = z.infer<typeof machineStateSchema>;
 
+export const codexAccountSchema = z.object({
+  id: z.string(),
+  email: z.string().nullable(),
+  label: z.string(),
+  savedAt: z.number(),
+});
+export type CodexAccount = z.infer<typeof codexAccountSchema>;
+
+export const codexIdentitySchema = z.object({ id: z.string(), email: z.string().nullable() });
+export type CodexIdentity = z.infer<typeof codexIdentitySchema>;
+
+export const codexStateSchema = z.object({
+  activeId: z.string().nullable(),
+  activeEmail: z.string().nullable(),
+  activeError: z.string().nullable(),
+  accounts: z.array(codexAccountSchema),
+});
+export type CodexState = z.infer<typeof codexStateSchema>;
+
 export const usageWindowSchema = z.object({
   label: z.string(),
   usedPercent: z.number(),

@@ -14,6 +14,9 @@ import {
 import { z } from "zod";
 import { hostContract, hostSignals } from "./host-contract";
 import {
+  codexAccountSchema,
+  codexIdentitySchema,
+  codexStateSchema,
   hostInfoSchema,
   machineStateSchema,
   providerCardSchema,
@@ -25,6 +28,18 @@ import { listProviderCards, providerUsage } from "./lib/provider-usage";
 import { resetLabel } from "./lib/reset-label";
 
 export const rpcContract = defineRpcContract({
+  codex_state: { input: z.null(), output: codexStateSchema },
+  codex_save: { input: z.object({ label: z.string().trim().min(1).max(60) }), output: z.object({ account: codexAccountSchema }) },
+  codex_switch: { input: z.object({ id: z.string() }), output: z.object({ account: codexAccountSchema }) },
+  codex_forget: { input: z.object({ id: z.string() }), output: z.object({ removed: z.boolean() }) },
+  codex_usage: { input: z.object({ id: z.string() }), output: z.object({ usage: usageSchema }) },
+  codex_login_start: { input: z.null(), output: z.object({ started: z.boolean() }) },
+  codex_login_poll: { input: z.null(), output: z.object({
+    status: z.enum(["idle", "pending", "done", "failed"]),
+    message: z.string().nullable(),
+    account: codexIdentitySchema.nullable(),
+  }) },
+  codex_login_cancel: { input: z.null(), output: z.object({ cancelled: z.boolean() }) },
   state: { input: z.null(), output: machineStateSchema },
   host_info: { input: z.null(), output: hostInfoSchema },
   save: {
@@ -83,7 +98,7 @@ function formatResets(resetsAt: string | null): string {
   return label === null ? "" : `  resets ${label}`;
 }
 
-function renderUsage(title: string, usage: Usage): string {
+function renderUsage(title: string, usage: Usage, provider: "claude" | "codex" = "claude"): string {
   switch (usage.status) {
     case "ok": {
       const head = [title, usage.planLabel, usage.accountEmail]
@@ -97,7 +112,9 @@ function renderUsage(title: string, usage: Usage): string {
       return [head, ...rows].join("\n");
     }
     case "expired":
-      return `${title}: Anthropic rejected the stored token. Run \`claude /login\` as this account, then \`bb claude-accounts save --label ${title}\`.`;
+      return provider === "codex"
+        ? `${title}: Codex access token expired. Switch to this account and start a new Codex thread to refresh it.`
+        : `${title}: Anthropic rejected the stored token. Run \`claude /login\` as this account, then \`bb claude-accounts save --label ${title}\`.`;
     case "unauthenticated":
       return `${title}: not logged in.`;
     case "not_installed":
@@ -163,6 +180,14 @@ export default async function plugin(bb: BbPluginApi) {
   };
 
   bb.rpc.register(rpcContract, {
+    codex_state: async () => host.call("codexState", null, await options()),
+    codex_save: async (input) => host.call("codexSave", input, await options()),
+    codex_switch: async (input) => host.call("codexSwitch", input, await options()),
+    codex_forget: async (input) => host.call("codexForget", input, await options()),
+    codex_usage: async (input) => host.call("codexUsage", input, await options()),
+    codex_login_start: async () => host.call("codexLoginStart", null, await options()),
+    codex_login_poll: async () => host.call("codexLoginPoll", null, await options()),
+    codex_login_cancel: async () => host.call("codexLoginCancel", null, await options()),
     state: async () => host.call("state", null, await options()),
     host_info: async () => ({
       hostId: await primaryHostId(),
@@ -187,8 +212,88 @@ export default async function plugin(bb: BbPluginApi) {
   bb.cli.register(
     defineCli({
       name: "claude-accounts",
-      summary: "Switch between saved Claude Code logins and read their limits",
+      summary: "Switch saved Claude Code and Codex logins and read limits",
       commands: {
+        "codex-status": cliCommand({
+          summary: "Active Codex login and saved accounts",
+          options: { json: { type: "boolean", description: "Emit JSON" } },
+          async run(input, ctx) {
+            const state = await host.call("codexState", null, await options(ctx.signal));
+            return { exitCode: 0, stdout: input.options.json ? JSON.stringify(state, null, 2) :
+              [`Active Codex: ${state.activeError ?? state.activeEmail ?? state.activeId ?? "none"}`,
+                ...state.accounts.map((account) => `${account.id === state.activeId ? "*" : " "} ${account.label}  ${account.email ?? account.id}`)].join("\n") };
+          },
+        }),
+        "codex-save": cliCommand({
+          summary: "Save the current Codex ChatGPT login",
+          options: { label: { type: "string", required: true, description: "Label for this account" } },
+          async run(input, ctx) {
+            const { account } = await host.call("codexSave", { label: input.options.label }, await options(ctx.signal));
+            return { exitCode: 0, stdout: `Saved Codex account "${account.label}" (${account.email ?? account.id}).` };
+          },
+        }),
+        "codex-login": cliCommand({
+          summary: "Sign in to another Codex account in the browser",
+          async run(_input, ctx) {
+            await host.call("codexLoginStart", null, await options(ctx.signal));
+            const deadline = Date.now() + 10 * 60_000;
+            for (;;) {
+              await new Promise((resolve) => setTimeout(resolve, 2000));
+              if (ctx.signal?.aborted) {
+                await host.call("codexLoginCancel", null, await options());
+                throw new PluginCliError("Codex sign-in was cancelled.", { code: "login_cancelled" });
+              }
+              const poll = await host.call("codexLoginPoll", null, await options(ctx.signal));
+              if (poll.status === "done" && poll.account !== null) {
+                return { exitCode: 0, stdout: `Signed in to Codex as ${poll.account.email ?? poll.account.id}. Save the current login with a label to add it to the list.` };
+              }
+              if (poll.status === "failed") {
+                throw new PluginCliError(poll.message ?? "Codex sign-in failed.", { code: "login_failed" });
+              }
+              if (poll.status === "idle" || Date.now() > deadline) {
+                await host.call("codexLoginCancel", null, await options());
+                throw new PluginCliError("Codex sign-in did not finish in time.", { code: "login_timeout" });
+              }
+            }
+          },
+        }),
+        "codex-usage": cliCommand({
+          summary: "Limits of a saved Codex account",
+          positionals: [{ name: "account", description: "Label, email or account id", required: true }],
+          options: { json: { type: "boolean", description: "Emit JSON" } },
+          async run(input, ctx) {
+            const state = await host.call("codexState", null, await options(ctx.signal));
+            const query = input.positionals.account.toLowerCase();
+            const matches = state.accounts.filter((account) => account.label.toLowerCase() === query || account.email?.toLowerCase() === query || account.id === input.positionals.account);
+            if (matches.length !== 1) throw new PluginCliError(matches.length ? "Ambiguous Codex account. Use its account id." : `No saved Codex account matches "${input.positionals.account}".`, { code: "unknown_account" });
+            const { usage } = await host.call("codexUsage", { id: matches[0]!.id }, await options(ctx.signal));
+            return { exitCode: 0, stdout: input.options.json ? JSON.stringify(usage, null, 2) : renderUsage(matches[0]!.label, usage, "codex") };
+          },
+        }),
+        "codex-switch": cliCommand({
+          summary: "Switch to a saved Codex ChatGPT login",
+          positionals: [{ name: "account", description: "Label, email or account id", required: true }],
+          async run(input, ctx) {
+            const state = await host.call("codexState", null, await options(ctx.signal));
+            const query = input.positionals.account.toLowerCase();
+            const matches = state.accounts.filter((account) => account.label.toLowerCase() === query || account.email?.toLowerCase() === query || account.id === input.positionals.account);
+            if (matches.length !== 1) throw new PluginCliError(matches.length ? "Ambiguous Codex account. Use its account id." : `No saved Codex account matches "${input.positionals.account}".`, { code: "unknown_account", hint: "Run `bb claude-accounts codex-status`." });
+            const result = await host.call("codexSwitch", { id: matches[0]!.id }, await options(ctx.signal));
+            return { exitCode: 0, stdout: `Switched Codex to "${result.account.label}". Start a new Codex thread. Finish old Codex threads before switching: they can rewrite the shared login file.` };
+          },
+        }),
+        "codex-forget": cliCommand({
+          summary: "Remove a saved Codex account snapshot",
+          positionals: [{ name: "account", description: "Label, email or account id", required: true }],
+          async run(input, ctx) {
+            const state = await host.call("codexState", null, await options(ctx.signal));
+            const query = input.positionals.account.toLowerCase();
+            const matches = state.accounts.filter((account) => account.label.toLowerCase() === query || account.email?.toLowerCase() === query || account.id === input.positionals.account);
+            if (matches.length !== 1) throw new PluginCliError(matches.length ? "Ambiguous Codex account. Use its account id." : `No saved Codex account matches "${input.positionals.account}".`, { code: "unknown_account" });
+            await host.call("codexForget", { id: matches[0]!.id }, await options(ctx.signal));
+            return { exitCode: 0, stdout: `Removed Codex account "${matches[0]!.label}".` };
+          },
+        }),
         status: cliCommand({
           summary: "Active login and saved accounts",
           options: { json: { type: "boolean", description: "Emit JSON" } },

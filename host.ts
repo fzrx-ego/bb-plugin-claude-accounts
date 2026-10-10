@@ -28,6 +28,8 @@ import {
   writeStore,
 } from "./lib/host-credentials.js";
 import { fetchUsage } from "./lib/host-usage.js";
+import { codexForget, codexSave, codexState, codexSwitch, codexUsage } from "./lib/codex-accounts.js";
+import { cancelCodexLogin, codexLoginInProgress, pollCodexLogin, startCodexLogin } from "./lib/codex-login.js";
 import {
   cancelLogin,
   loginState,
@@ -129,6 +131,44 @@ export default experimental_defineHostEntry({
   contract: hostContract,
   experimental_signals: hostSignals,
   handlers: {
+    codexState: async (_input, context) => codexState(context.experimental_paths.dataDir),
+    codexSave: async ({ label }, context) => {
+      if (codexLoginInProgress()) throw new Error("Finish or cancel Codex sign-in before changing accounts.");
+      const account = await codexSave(context.experimental_paths.dataDir, label);
+      await context.experimental_emitSignal("changed", { reason: "codex-save" });
+      return { account };
+    },
+    codexSwitch: async ({ id }, context) => {
+      if (codexLoginInProgress()) throw new Error("Finish or cancel Codex sign-in before changing accounts.");
+      const result = await codexSwitch(context.experimental_paths.dataDir, id);
+      await context.experimental_emitSignal("changed", { reason: "codex-switch" });
+      return result;
+    },
+    codexForget: async ({ id }, context) => {
+      if (codexLoginInProgress()) throw new Error("Finish or cancel Codex sign-in before changing accounts.");
+      const removed = await codexForget(context.experimental_paths.dataDir, id);
+      await context.experimental_emitSignal("changed", { reason: "codex-forget" });
+      return { removed };
+    },
+    codexUsage: async ({ id }, context) => ({
+      usage: await codexUsage(context.experimental_paths.dataDir, id, context.signal),
+    }),
+    codexLoginStart: async (_input, context) => {
+      await startCodexLogin(context.experimental_paths.dataDir);
+      return { started: true };
+    },
+    codexLoginPoll: async (_input, context) => {
+      const state = pollCodexLogin();
+      if (state.status === "done") {
+        await context.experimental_emitSignal("changed", { reason: "codex-login" });
+      }
+      return {
+        status: state.status,
+        message: state.status === "pending" || state.status === "failed" ? state.message : null,
+        account: state.status === "done" ? state.account : null,
+      };
+    },
+    codexLoginCancel: async () => ({ cancelled: await cancelCodexLogin() }),
     state: async (_input, context) => buildState(context.experimental_paths.dataDir),
 
     save: async ({ label }, context) => {
