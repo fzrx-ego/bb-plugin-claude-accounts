@@ -3,13 +3,11 @@
 // plaintext path Claude Code already uses on Windows
 // (~/.claude/.credentials.json) so switches stay interoperable.
 
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
 const STORE_ROOT = path.join(
   process.env.LOCALAPPDATA?.trim() || path.join(os.homedir(), "AppData", "Local"),
   "bb-claude-accounts",
@@ -32,34 +30,27 @@ export function claudeCredentialsPath(): string {
   return path.join(os.homedir(), ".claude", ".credentials.json");
 }
 
-async function runDpapi(
-  mode: "protect" | "unprotect",
-  input: Buffer,
-): Promise<Buffer> {
-  await mkdir(path.join(STORE_ROOT, "tmp"), { recursive: true });
-  const inFile = path.join(
-    STORE_ROOT,
-    "tmp",
-    `in-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.bin`,
-  );
-  const outFile = `${inFile}.out`;
-  try {
-    await writeFile(inFile, input, { mode: 0o600 });
-    const script = `
+// Plaintext never touches the disk: it travels base64-encoded through the
+// child's stdin, and the DPAPI result comes back the same way on stdout.
+const DPAPI_SCRIPT = `
 Add-Type -AssemblyName System.Security
-$mode = '${mode}'
-$inPath = '${inFile.replace(/'/gu, "''")}'
-$outPath = '${outFile.replace(/'/gu, "''")}'
-$bytes = [System.IO.File]::ReadAllBytes($inPath)
+$mode = $args[0]
+$bytes = [Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())
 $scope = [System.Security.Cryptography.DataProtectionScope]::CurrentUser
 $result = if ($mode -eq 'protect') {
   [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, $scope)
 } else {
   [System.Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, $scope)
 }
-[System.IO.File]::WriteAllBytes($outPath, $result)
+[Console]::Out.Write([Convert]::ToBase64String($result))
 `;
-    await execFileAsync(
+
+function runDpapi(
+  mode: "protect" | "unprotect",
+  input: Buffer,
+): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const child = spawn(
       "powershell.exe",
       [
         "-NoProfile",
@@ -67,15 +58,31 @@ $result = if ($mode -eq 'protect') {
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        script,
+        `& { ${DPAPI_SCRIPT} } ${mode}`,
       ],
-      { timeout: 15_000, windowsHide: true },
+      { stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
     );
-    return await readFile(outFile);
-  } finally {
-    await unlink(inFile).catch(() => undefined);
-    await unlink(outFile).catch(() => undefined);
-  }
+    const stdout: Buffer[] = [];
+    let stderr = "";
+    const timer = setTimeout(() => child.kill(), 15_000);
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (cause) => {
+      clearTimeout(timer);
+      reject(cause);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error(`DPAPI ${mode} failed: ${stderr.trim() || `exit ${code}`}`));
+        return;
+      }
+      resolve(Buffer.from(Buffer.concat(stdout).toString("ascii").trim(), "base64"));
+    });
+    child.stdin.end(input.toString("base64"));
+  });
 }
 
 export async function readWinSecret(
