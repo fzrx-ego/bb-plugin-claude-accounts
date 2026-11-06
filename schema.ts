@@ -1,7 +1,8 @@
 // Shared shapes for the server, the host worker, and the page.
 //
-// Tokens never appear here: a snapshot's credentials stay in the macOS
-// Keychain on the host, and only these fields cross an RPC boundary.
+// Tokens never appear here: a snapshot's credentials stay in the host
+// credential store (Keychain on macOS, DPAPI files on Windows), and only
+// these fields cross an RPC boundary.
 
 import { z } from "zod";
 
