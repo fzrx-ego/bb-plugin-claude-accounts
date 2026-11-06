@@ -86,15 +86,8 @@ export async function readWinSecret(
     const protectedBytes = await readFile(secretPath(service, account));
     const plain = await runDpapi("unprotect", protectedBytes);
     return plain.toString("utf8");
-  } catch (cause) {
-    if (
-      typeof cause === "object" &&
-      cause !== null &&
-      "code" in cause &&
-      (cause as { code?: string }).code === "ENOENT"
-    ) {
-      return null;
-    }
+  } catch {
+    // Missing file and a failed DPAPI round-trip both read as "no snapshot".
     return null;
   }
 }

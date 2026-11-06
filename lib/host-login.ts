@@ -228,9 +228,21 @@ export async function startLogin(): Promise<{ url: string }> {
       // The page shows the link too, so a failed `open` is not fatal.
     });
   } else if (process.platform === "win32") {
-    execFile("cmd", ["/c", "start", "", href], { windowsHide: true }, () => {
-      // The page shows the link too, so a failed `start` is not fatal.
-    });
+    // `cmd /c start` would split the URL at every `&` in the query string;
+    // Start-Process receives the whole URL as one single-quoted argument.
+    execFile(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Start-Process -FilePath '${href.replace(/'/gu, "''")}'`,
+      ],
+      { windowsHide: true },
+      () => {
+        // The page shows the link too, so a failed `Start-Process` is not fatal.
+      },
+    );
   } else {
     execFile("xdg-open", [href], () => {
       // The page shows the link too, so a failed `xdg-open` is not fatal.
