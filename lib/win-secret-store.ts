@@ -3,6 +3,7 @@
 // plaintext path Claude Code already uses on Windows
 // (~/.claude/.credentials.json) so switches stay interoperable.
 
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -33,6 +34,7 @@ export function claudeCredentialsPath(): string {
 // Plaintext never touches the disk: it travels base64-encoded through the
 // child's stdin, and the DPAPI result comes back the same way on stdout.
 const DPAPI_SCRIPT = `
+$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
 $mode = $args[0]
 $bytes = [Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())
@@ -64,7 +66,11 @@ function runDpapi(
     );
     const stdout: Buffer[] = [];
     let stderr = "";
-    const timer = setTimeout(() => child.kill(), 15_000);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, 15_000);
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
@@ -75,11 +81,21 @@ function runDpapi(
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(`DPAPI ${mode} failed: ${stderr.trim() || `exit ${code}`}`));
+      if (timedOut || code !== 0) {
+        reject(new Error(`DPAPI ${mode} failed: ${timedOut ? "timed out" : stderr.trim() || `exit ${code}`}`));
         return;
       }
-      resolve(Buffer.from(Buffer.concat(stdout).toString("ascii").trim(), "base64"));
+      const encoded = Buffer.concat(stdout).toString("utf8").trim();
+      if (!encoded || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) {
+        reject(new Error(`DPAPI ${mode} returned invalid base64`));
+        return;
+      }
+      resolve(Buffer.from(encoded, "base64"));
+    });
+    child.stdin.on("error", (cause) => {
+      clearTimeout(timer);
+      child.kill();
+      reject(cause);
     });
     child.stdin.end(input.toString("base64"));
   });
@@ -107,9 +123,9 @@ export async function writeWinSecret(
   const target = secretPath(service, account);
   await mkdir(path.dirname(target), { recursive: true });
   const protectedBytes = await runDpapi("protect", Buffer.from(value, "utf8"));
-  const temp = `${target}.${process.pid}.tmp`;
+  const temp = `${target}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temp, protectedBytes, { mode: 0o600 });
+    await writeFile(temp, protectedBytes, { mode: 0o600, flag: "wx" });
     await rename(temp, target);
   } catch (cause) {
     await unlink(temp).catch(() => undefined);

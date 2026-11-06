@@ -6,7 +6,7 @@ logins on one machine, plus provider limits.
 ## Install
 
 ```
-bb plugin install git:https://github.com/fzrx-ego/bb-plugin-claude-accounts.git@semver:^0.4.0
+bb plugin install git:https://github.com/fzrx-ego/bb-plugin-claude-accounts.git@semver:^0.5.0
 ```
 
 From a local checkout:
