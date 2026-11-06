@@ -53,13 +53,27 @@ bb claude-accounts codex-forget Work
 
 ## Where the secrets are
 
+### macOS
+
 - Claude's own credentials: login Keychain, service `Claude Code-credentials`.
 - Snapshots: login Keychain, service `bb-claude-accounts`, one item per
   account uuid, holding the credentials plus the `oauthAccount` block of
   `~/.claude.json`.
-- Labels and identities: `<dataDir>/plugins/claude-accounts/host-data/accounts.json`.
-- Codex snapshots: login Keychain, service `bb-codex-accounts`; labels and
-  identities: `codex-accounts.json` in the same host data directory.
+- Codex snapshots: login Keychain, service `bb-codex-accounts` (written via a
+  small Swift helper so tokens stay out of `argv`).
+
+### Windows
+
+- Claude's own credentials: `~/.claude/.credentials.json` (same path Claude
+  Code already uses on Windows).
+- Claude / Codex snapshots: DPAPI-protected files under
+  `%LOCALAPPDATA%\bb-claude-accounts\secrets\`, keyed by service + account id.
+  Secrets are encrypted for the current Windows user.
+
+### Shared
+
+- Labels and identities: `<dataDir>/plugins/claude-accounts/host-data/accounts.json`
+  (and `codex-accounts.json` for Codex labels).
 - Active Codex login: `~/.codex/auth.json`. BB's isolated `CODEX_HOME` links
   its `auth.json` to this file.
 
@@ -78,8 +92,10 @@ to add the new login to the list. A switch atomically
 replaces `~/.codex/auth.json` with the chosen snapshot. It affects
 new Codex threads. Finish running Codex threads before switching accounts:
 an old thread can refresh credentials and write to the shared auth file.
-API-key logins are not supported. Saving a Codex login needs the Xcode Command Line Tools. If an idle snapshot's refresh token has
-been revoked, run `codex login` for that account and save it again.
+API-key logins are not supported. On macOS, saving a Codex login needs the
+Xcode Command Line Tools. On Windows, snapshots use DPAPI instead. If an idle
+snapshot's refresh token has been revoked, run `codex login` for that account
+and save it again.
 Forgetting the active account removes its saved snapshot while leaving the live
 Codex login in place. Save it with a label before switching away.
 
@@ -103,10 +119,10 @@ snapshot immediately.
 
 **Sign in another account** on the page (or `bb claude-accounts login`) runs
 Claude Code's own OAuth flow: it opens claude.com in the browser, catches the
-redirect on a loopback port, and writes the result into the Keychain, into
-`~/.claude.json`, and into a snapshot under the new account's email. The
-login it produces is the one Claude Code itself would have produced —
-same client id, same scopes.
+redirect on a loopback port, and writes the result into the platform
+credential store, into `~/.claude.json`, and into a snapshot under the new
+account's email. The login it produces is the one Claude Code itself would
+have produced — same client id, same scopes.
 
 ## Develop
 
@@ -116,7 +132,8 @@ bb plugin build .
 bb plugin install .
 ```
 
-macOS only: everything hangs off `security(1)` and the login Keychain.
+Supported on **macOS** (Keychain + `security(1)`) and **Windows** (Claude
+credentials file + DPAPI snapshot store).
 
 Source lives in `~/.bb/user-plugins/` on purpose: a plugin installed from a
 thread workspace disappears when that environment is retired.

@@ -1,4 +1,4 @@
-// Host RPC contract: everything that touches the Keychain, ~/.claude.json,
+// Host RPC contract: everything that touches the credential store, ~/.claude.json,
 // or the Anthropic usage endpoint runs in the host worker, never on the
 // server.
 

@@ -227,6 +227,14 @@ export async function startLogin(): Promise<{ url: string }> {
     execFile("open", [href], () => {
       // The page shows the link too, so a failed `open` is not fatal.
     });
+  } else if (process.platform === "win32") {
+    execFile("cmd", ["/c", "start", "", href], { windowsHide: true }, () => {
+      // The page shows the link too, so a failed `start` is not fatal.
+    });
+  } else {
+    execFile("xdg-open", [href], () => {
+      // The page shows the link too, so a failed `xdg-open` is not fatal.
+    });
   }
   return { url: href };
 }

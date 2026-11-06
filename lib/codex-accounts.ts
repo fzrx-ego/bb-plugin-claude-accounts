@@ -6,6 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { codexAccountSchema, type CodexAccount, type CodexIdentity, type CodexState, type Usage } from "../schema";
+import {
+  deleteWinSecret,
+  readWinSecret,
+  writeWinSecret,
+} from "./win-secret-store.js";
 
 const execFileAsync = promisify(execFile);
 const SERVICE = "bb-codex-accounts";
@@ -87,7 +92,9 @@ async function live(): Promise<{ raw: string; id: string; email: string | null }
 }
 
 async function keychain(args: string[]): Promise<string> {
-  if (process.platform !== "darwin") throw new Error("Codex account switching requires macOS Keychain.");
+  if (process.platform !== "darwin") {
+    throw new Error("Codex Keychain access is only available on macOS.");
+  }
   try {
     return (await execFileAsync("security", args, { timeout: 10_000, maxBuffer: 1024 * 1024 })).stdout;
   } catch {
@@ -95,14 +102,38 @@ async function keychain(args: string[]): Promise<string> {
   }
 }
 
+function decodeCodexSnapshot(value: string): string {
+  const trimmed = value.trim();
+  const decoded = /^(?:[0-9a-f]{2})+$/iu.test(trimmed)
+    ? Buffer.from(trimmed, "hex").toString("utf8")
+    : trimmed;
+  return decoded.startsWith("codex1:")
+    ? Buffer.from(decoded.slice(7), "base64").toString("utf8")
+    : decoded;
+}
+
 async function readSnapshot(id: string): Promise<string> {
+  if (process.platform === "win32") {
+    const value = await readWinSecret(SERVICE, id);
+    if (value === null) {
+      throw new Error("Could not read saved Codex credentials.");
+    }
+    return decodeCodexSnapshot(value);
+  }
   const value = (await keychain(["find-generic-password", "-s", SERVICE, "-a", id, "-w"])).trim();
-  const decoded = /^(?:[0-9a-f]{2})+$/iu.test(value) ? Buffer.from(value, "hex").toString("utf8") : value;
-  return decoded.startsWith("codex1:") ? Buffer.from(decoded.slice(7), "base64").toString("utf8") : decoded;
+  return decodeCodexSnapshot(value);
 }
 
 async function deleteSnapshot(id: string): Promise<void> {
-  if (process.platform !== "darwin") throw new Error("Codex account switching requires macOS Keychain.");
+  if (process.platform === "win32") {
+    await deleteWinSecret(SERVICE, id);
+    return;
+  }
+  if (process.platform !== "darwin") {
+    throw new Error(
+      `Codex account switching is not supported on ${process.platform}.`,
+    );
+  }
   try {
     await execFileAsync("security", ["delete-generic-password", "-s", SERVICE, "-a", id], { timeout: 10_000 });
   } catch (cause) {
@@ -113,10 +144,18 @@ async function deleteSnapshot(id: string): Promise<void> {
 }
 
 async function writeSnapshot(id: string, raw: string): Promise<void> {
-  if (process.platform !== "darwin") throw new Error("Codex account switching requires macOS Keychain.");
+  const value = `codex1:${Buffer.from(raw).toString("base64")}`;
+  if (process.platform === "win32") {
+    await writeWinSecret(SERVICE, id, value);
+    return;
+  }
+  if (process.platform !== "darwin") {
+    throw new Error(
+      `Codex account switching is not supported on ${process.platform}.`,
+    );
+  }
   // `security -w SECRET` exposes tokens in argv; its stdin prompt truncates
   // long values. The small Swift helper writes through Security.framework.
-  const value = `codex1:${Buffer.from(raw).toString("base64")}`;
   await new Promise<void>((resolve, reject) => {
     const child = spawn("/usr/bin/swift", ["-e", SWIFT_KEYCHAIN_WRITER, SERVICE, id],
       { stdio: ["pipe", "ignore", "pipe"] });

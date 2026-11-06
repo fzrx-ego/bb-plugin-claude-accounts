@@ -1,17 +1,25 @@
-// Keychain and ~/.claude.json access. Host-worker code only.
+// Credential store and ~/.claude.json access. Host-worker code only.
 //
 // Claude Code keeps its OAuth credentials in the login Keychain under
-// "Claude Code-credentials" and its identity in ~/.claude.json. A snapshot of
-// both is stored under this plugin's own service, "bb-claude-accounts", keyed
-// by the account uuid. Switching writes a snapshot back into Claude's own
-// item; no token ever leaves the host.
+// "Claude Code-credentials" on macOS, or in ~/.claude/.credentials.json on
+// Windows, plus its identity in ~/.claude.json. A snapshot of both is stored
+// under this plugin's own service, "bb-claude-accounts", keyed by the account
+// uuid (Keychain on macOS, DPAPI files on Windows). Switching writes a
+// snapshot back into Claude's own store; no token ever leaves the host.
 
 import { execFile } from "node:child_process";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { Identity, SavedAccount } from "../schema";
+import {
+  claudeCredentialsPath,
+  deleteWinSecret,
+  readWinSecret,
+  writeClaudeCredentialsFile,
+  writeWinSecret,
+} from "./win-secret-store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -76,6 +84,10 @@ async function readKeychain(
       would hand back some other saved login. */
   exact = false,
 ): Promise<string | null> {
+  if (process.platform === "win32") {
+    if (account === null) return null;
+    return readWinSecret(service, account);
+  }
   if (process.platform !== "darwin") return null;
   const attempts =
     account === null
@@ -99,8 +111,18 @@ async function writeKeychain(
   account: string,
   value: string,
 ): Promise<void> {
+  if (process.platform === "win32") {
+    if (service === CLAUDE_KEYCHAIN_SERVICE) {
+      await writeClaudeCredentialsFile(value);
+      return;
+    }
+    await writeWinSecret(service, account, value);
+    return;
+  }
   if (process.platform !== "darwin") {
-    throw new Error("Claude accounts switching is macOS-only.");
+    throw new Error(
+      `Claude accounts switching is not supported on ${process.platform}.`,
+    );
   }
   const result = await security([
     "add-generic-password",
@@ -121,6 +143,17 @@ async function deleteKeychain(
   service: string,
   account: string,
 ): Promise<boolean> {
+  if (process.platform === "win32") {
+    if (service === CLAUDE_KEYCHAIN_SERVICE) {
+      try {
+        await unlink(claudeCredentialsPath());
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return deleteWinSecret(service, account);
+  }
   if (process.platform !== "darwin") return false;
   const result = await security([
     "delete-generic-password",
@@ -134,16 +167,20 @@ async function deleteKeychain(
 
 /** Credentials Claude Code is using right now, as stored text. */
 export async function readActiveCredentialsRaw(): Promise<string | null> {
+  if (process.platform === "win32") {
+    try {
+      return await readFile(claudeCredentialsPath(), "utf8");
+    } catch {
+      return null;
+    }
+  }
   const fromKeychain = await readKeychain(
     CLAUDE_KEYCHAIN_SERVICE,
     os.userInfo().username,
   );
   if (fromKeychain !== null) return fromKeychain;
   try {
-    return await readFile(
-      path.join(os.homedir(), ".claude", ".credentials.json"),
-      "utf8",
-    );
+    return await readFile(claudeCredentialsPath(), "utf8");
   } catch {
     return null;
   }

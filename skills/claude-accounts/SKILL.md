@@ -6,7 +6,8 @@ description: Switch the machine's Claude Code or Codex login between saved accou
 # Fast Switch Accounts
 
 One Claude Code login is active per machine. This plugin snapshots logins in
-the macOS Keychain and swaps them. Tokens stay on the host.
+the macOS Keychain (or a DPAPI store on Windows) and swaps them. Tokens stay
+on the host.
 
 ```
 bb claude-accounts status                 # active login + saved accounts
@@ -36,7 +37,7 @@ Rules:
   Save the current login with a label first. The existing login stays active
   until browser sign-in succeeds. Label and save the new current login to add
   it to the list. Only ChatGPT logins are supported. Codex snapshots are stored
-  in the macOS login Keychain.
+  in the macOS login Keychain, or DPAPI-protected files on Windows.
 - `usage` reads the snapshot's own token, so it never disturbs the active
   login. An expired snapshot needs one `switch` to that account to refresh.
 - `login` opens the browser, completes Claude's OAuth flow on a loopback

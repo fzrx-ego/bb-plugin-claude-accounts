@@ -1,9 +1,9 @@
 // Host worker: the only place that reads or writes Claude credentials.
 //
 // BB keeps one live Claude Code login per machine. Saving takes a snapshot of
-// the Keychain item plus the identity in ~/.claude.json; switching writes a
-// snapshot back. Tokens stay in the Keychain on this machine — the server and
-// the page only ever see labels, emails, and percentages.
+// the platform credential store plus the identity in ~/.claude.json; switching
+// writes a snapshot back. Tokens stay on this machine — the server and the
+// page only ever see labels, emails, and percentages.
 
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import { hostContract, hostSignals } from "./host-contract.js";
