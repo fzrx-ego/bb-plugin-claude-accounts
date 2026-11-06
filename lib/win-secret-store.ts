@@ -115,21 +115,35 @@ export async function readWinSecret(
   }
 }
 
+const pendingWrites = new Map<string, Promise<void>>();
+
 export async function writeWinSecret(
   service: string,
   account: string,
   value: string,
 ): Promise<void> {
   const target = secretPath(service, account);
-  await mkdir(path.dirname(target), { recursive: true });
-  const protectedBytes = await runDpapi("protect", Buffer.from(value, "utf8"));
-  const temp = `${target}.${randomUUID()}.tmp`;
+  const write = async () => {
+    await mkdir(path.dirname(target), { recursive: true });
+    const protectedBytes = await runDpapi("protect", Buffer.from(value, "utf8"));
+    const temp = `${target}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, protectedBytes, { mode: 0o600, flag: "wx" });
+      await rename(temp, target);
+    } catch (cause) {
+      await unlink(temp).catch(() => undefined);
+      throw cause;
+    }
+  };
+  // Windows cannot replace the same destination in parallel. Keep writes to
+  // one snapshot ordered; each caller still receives its own write failure.
+  const previous = pendingWrites.get(target) ?? Promise.resolve();
+  const pending = previous.then(write, write);
+  pendingWrites.set(target, pending);
   try {
-    await writeFile(temp, protectedBytes, { mode: 0o600, flag: "wx" });
-    await rename(temp, target);
-  } catch (cause) {
-    await unlink(temp).catch(() => undefined);
-    throw cause;
+    await pending;
+  } finally {
+    if (pendingWrites.get(target) === pending) pendingWrites.delete(target);
   }
 }
 
